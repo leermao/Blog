@@ -421,11 +421,83 @@ this.commit = function boundCommit (type, payload, options) {
 }
 ```
 我们会处理disptch,commit,这两个其实就是修改了执行环境为store
-接下来我们执行
+
+#### installModule
 ```
 installModule(this, state, [], this._modules.root)
 ```
-其实这里面就是对`action` `mutations` `modules`的注册等；
+其实这里面就是对`action` `mutations` `modules`的注册等
 
 我们首先看参数`(this, state, [], this._modules.root)`
+```
+function installModule (store, rootState, path, module, hot) {
+  const isRoot = !path.length
+  const namespace = store._modules.getNamespace(path)
+
+  // register in namespace map
+  if (module.namespaced) {
+    if (store._modulesNamespaceMap[namespace] && process.env.NODE_ENV !== 'production') {
+      console.error(`[vuex] duplicate namespace ${namespace} for the namespaced module ${path.join('/')}`)
+    }
+    store._modulesNamespaceMap[namespace] = module
+  }
+
+  // set state
+  if (!isRoot && !hot) {
+    const parentState = getNestedState(rootState, path.slice(0, -1))
+    const moduleName = path[path.length - 1]
+    store._withCommit(() => {
+      if (process.env.NODE_ENV !== 'production') {
+        if (moduleName in parentState) {
+          console.warn(
+            `[vuex] state field "${moduleName}" was overridden by a module with the same name at "${path.join('.')}"`
+          )
+        }
+      }
+      Vue.set(parentState, moduleName, module.state)
+    })
+  }
+
+  const local = module.context = makeLocalContext(store, namespace, path)
+
+  module.forEachMutation((mutation, key) => {
+    const namespacedType = namespace + key
+    registerMutation(store, namespacedType, mutation, local)
+  })
+
+  module.forEachAction((action, key) => {
+    const type = action.root ? key : namespace + key
+    const handler = action.handler || action
+    registerAction(store, type, handler, local)
+  })
+
+  module.forEachGetter((getter, key) => {
+    const namespacedType = namespace + key
+    registerGetter(store, namespacedType, getter, local)
+  })
+
+  module.forEachChild((child, key) => {
+    installModule(store, rootState, path.concat(key), child, hot)
+  })
+}
+```
+首先我们先看看`const namespace = store._modules.getNamespace(path)` 这样做的目的其实是获取每个模块的空间
+```
+const store = new Vuex.Store({
+  modules: {
+    a: modulesA,
+    b: modulesB
+  },
+});
+
+其实这里面modules的空间为 root a b 这一步就是为了获取每个modules的空间 即 root a b
+```
+然后根据root a b三个modules空间去合并`registerMutation` `registerAction` `registerGetter` 然后重复操作
+```
+module.forEachChild((child, key) => {
+  installModule(store, rootState, path.concat(key), child, hot)
+})
+```
+![](../assets/vuex/store.png)
+我们可以出来action mutations getter等做了合并，添加了namespace，做了参数合并。
 
