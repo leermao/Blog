@@ -1,4 +1,4 @@
-## vuex源码分析
+## vuex源码分析之Store的实例化过程
 
 本文从源码角度一步一步的分析vuex处理的过程，下面的代码会切分的比价碎，希望大家`git clone https://github.com/vuejs/vuex.git`源码之后 一步一步调试
 
@@ -43,7 +43,7 @@ new Vue({
 ```
 在vue文件中 我们先引入`vuex`，然后注册`vue.use(vuex)`注册，然后使用`new Vuex.Store`实例化store，最后将store传到vue options中；
 
-### index.js
+### Index.js入口
 首先我们查看vuex的源码package.json
 ```
 {
@@ -426,7 +426,7 @@ this.commit = function boundCommit (type, payload, options) {
 ```
 installModule(this, state, [], this._modules.root)
 ```
-其实这里面就是对`action` `mutations` `modules`的注册等
+installModule 实际上就是完成了模块下的 `state、getters、actions、mutations` 的初始化工作，并且通过递归遍历的方式，就完成了所有子模块的安装工作。
 
 我们首先看参数`(this, state, [], this._modules.root)`
 ```
@@ -481,7 +481,29 @@ function installModule (store, rootState, path, module, hot) {
   })
 }
 ```
+installModule 方法支持 5 个参数，store 表示 `root store`；state 表示 `root state`；path 表示模块的访问路径 为数组存储；module 表示当前的模块 即`root` `a` `b`，hot 表示是否是热更新。
+
+接下来看函数逻辑，这里涉及到了命名空间的概念，默认情况下，模块内部的 action、mutation 和 getter 是注册在全局命名空间的——这样使得多个模块能够对同一 mutation 或 action 作出响应。如果我们希望模块具有更高的封装度和复用性，可以通过添加 namespaced: true 的方式使其成为带命名空间的模块。当模块被注册后，它的所有 getter、action 及 mutation 都会自动根据模块注册的路径调整命名;
+
 首先我们先看看`const namespace = store._modules.getNamespace(path)` 这样做的目的其实是获取每个模块的空间
+
+```
+getNamespace 的定义在 src/module/module-collection.js 中：
+
+
+getNamespace (path) {
+  let module = this.root
+  return path.reduce((namespace, key) => {
+    module = module.getChild(key)
+    return namespace + (module.namespaced ? key + '/' : '')
+  }, '')
+}
+···
+```
+这里主要是看子模块是否设置`namespaced`，如果设置，则把`key`拼接到`namespaced`返回，方便之后所有的内容加上命名空间即
+下图所示。
+
+![](../assets/vuex/Store.png)
 ```
 const store = new Vuex.Store({
   modules: {
@@ -492,12 +514,152 @@ const store = new Vuex.Store({
 
 其实这里面modules的空间为 root a b 这一步就是为了获取每个modules的空间 即 root a b
 ```
-然后根据root a b三个modules空间去合并`registerMutation` `registerAction` `registerGetter` 然后重复操作
+
+接下来的代码比较重要，我们会看见`local`和`root`,主要是为了区分当前模块和全局模块，我们可以在当前模块中拿到全局模块的数据，即
 ```
-module.forEachChild((child, key) => {
-  installModule(store, rootState, path.concat(key), child, hot)
+actions: {
+  someAction ({ getters, rootState, rootGetters }) {
+    ...
+  },
+}
+```
+这里我们主要要拿到`local`环境
+
+```
+const local = module.context = makeLocalContext(store, namespace, path)
+```
+
+##### makeLocalContext
+```
+function makeLocalContext (store, namespace, path) {
+  const noNamespace = namespace === ''
+
+  const local = {
+    dispatch: noNamespace ? store.dispatch : (_type, _payload, _options) => {
+      const args = unifyObjectStyle(_type, _payload, _options)
+      const { payload, options } = args
+      let { type } = args
+
+      if (!options || !options.root) {
+        type = namespace + type
+        if (process.env.NODE_ENV !== 'production' && !store._actions[type]) {
+          console.error(`[vuex] unknown local action type: ${args.type}, global type: ${type}`)
+          return
+        }
+      }
+
+      return store.dispatch(type, payload)
+    },
+
+    commit: noNamespace ? store.commit : (_type, _payload, _options) => {
+      const args = unifyObjectStyle(_type, _payload, _options)
+      const { payload, options } = args
+      let { type } = args
+
+      if (!options || !options.root) {
+        type = namespace + type
+        if (process.env.NODE_ENV !== 'production' && !store._mutations[type]) {
+          console.error(`[vuex] unknown local mutation type: ${args.type}, global type: ${type}`)
+          return
+        }
+      }
+
+      store.commit(type, payload, options)
+    }
+  }
+
+  // getters and state object must be gotten lazily
+  // because they will be changed by vm update
+  Object.defineProperties(local, {
+    getters: {
+      get: noNamespace
+        ? () => store.getters
+        : () => makeLocalGetters(store, namespace)
+    },
+    state: {
+      get: () => getNestedState(store.state, path)
+    }
+  })
+
+  return local
+}
+```
+从源码我们知道，返回一个本地对象`local`，对于`dispatch`和`commit`，开始的时候，我们首先判断是否有`namespace`，如果不存在则挂载到全局下，否则添加到对应的命名空间上。
+对于`getters`和`state`只不过是查找的位置不一样而已。
+
+接下来它就会遍历模块中定义的 `mutations、actions、getters`，分别执行它们的注册工作，它们的注册逻辑都大同小异。
+
+### resetStoreVM(this, state);
+实例化最后一步 `resetStoreVM(this, state)`
+```
+function resetStoreVM (store, state, hot) {
+  const oldVm = store._vm
+
+  // bind store public getters
+  store.getters = {}
+  const wrappedGetters = store._wrappedGetters
+  const computed = {}
+  forEachValue(wrappedGetters, (fn, key) => {
+    // use computed to leverage its lazy-caching mechanism
+    computed[key] = () => fn(store)
+    Object.defineProperty(store.getters, key, {
+      get: () => store._vm[key],
+      enumerable: true // for local getters
+    })
+  })
+
+  // use a Vue instance to store the state tree
+  // suppress warnings just in case the user has added
+  // some funky global mixins
+  const silent = Vue.config.silent
+  Vue.config.silent = true
+  store._vm = new Vue({
+    data: {
+      $$state: state
+    },
+    computed
+  })
+  Vue.config.silent = silent
+
+  // enable strict mode for new vm
+  if (store.strict) {
+    enableStrictMode(store)
+  }
+
+  if (oldVm) {
+    if (hot) {
+      // dispatch changes in all subscribed watchers
+      // to force getter re-evaluation for hot reloading.
+      store._withCommit(() => {
+        oldVm._data.$$state = null
+      })
+    }
+    Vue.nextTick(() => oldVm.$destroy())
+  }
+}
+```
+这一步的主要思想就是建立 `getters` 和 `state` 的联系，`state`变化`getters`也会自动的跟着变化，这里我们想到了什么？对了就是Vue的`computed`，所以是也是根据Vue是实现的。
+
+```
+store.getters = {}
+const wrappedGetters = store._wrappedGetters
+```
+初始的时候在`store`实例上添加getters属性，然后又获取了私有属性`_wrappedGetters`
+```
+const wrappedGetters = store._wrappedGetters
+const computed = {}
+forEachValue(wrappedGetters, (fn, key) => {
+  // use computed to leverage its lazy-caching mechanism
+  computed[key] = () => fn(store)
+  Object.defineProperty(store.getters, key, {
+    get: () => store._vm[key],
+    enumerable: true // for local getters
+  })
 })
+
 ```
-![](../assets/vuex/store.png)
-我们可以出来action mutations getter等做了合并，添加了namespace，做了参数合并。
+当我根据 `key` 访问 `store.getters` 的某一个 `getter` 的时候，实际上就是访问了 `store._vm[key]`，也就是 `computed[key]`，在执行 `computed[key]` 对应的函数的时候，会执行 `rawGetter(local.state,...)` 方法，那么就会访问到 `store.state`，进而访问到 `store._vm._data.$$state`，这样就建立了一个依赖关系。当 `store.state` 发生变化的时候，下一次再访问 `store.getters` 的时候会重新计算。
+
+### 总结
+这里我们分析了Store的实例化过程，把store比喻成仓库，modules就为子仓库，我们如何将总仓库和子仓库结合合并是这节课的关键。主要就是通过命名空间做递归调用执行循环。
 
