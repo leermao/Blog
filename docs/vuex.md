@@ -657,7 +657,14 @@ forEachValue(wrappedGetters, (fn, key) => {
   })
 })
 
+store._vm = new Vue({
+  data: {
+    $$state: state
+  },
+  computed
+})
 ```
+这里其实就是关联的重点，我们可以看 `wrappedGetters`其实就是我们定义`getter`函数的集合，我们遍历这个函数，然后放入`computed`这里面，
 当我根据 `key` 访问 `store.getters` 的某一个 `getter` 的时候，实际上就是访问了 `store._vm[key]`，也就是 `computed[key]`，在执行 `computed[key]` 对应的函数的时候，会执行 `rawGetter(local.state,...)` 方法，那么就会访问到 `store.state`，进而访问到 `store._vm._data.$$state`，这样就建立了一个依赖关系。当 `store.state` 发生变化的时候，下一次再访问 `store.getters` 的时候会重新计算。
 
 ### 总结
