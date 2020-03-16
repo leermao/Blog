@@ -393,7 +393,7 @@ if (path.length === 0) {
 这段代码的else阶段，因为每次都是往`path`中重新添加，所以每次以
 `path.slice(0, -1)`获取最后一个，然后以`this.get(path.slice(0, -1))`拿到`a`然后往this.root中添加内容，我们刚开始知道this.root为一个对象，然后`this.get(path.slice(0, -1))`其实是添加children,字段为module,我们调试之后可以知道：
 
-!['x'](../assets/vuex/Module.png)
+!['x'](/assets/vuex/Module.png)
 其实就是this.root下面添加两个modules的实例化`a`,`b`,这样使得
 ```
 const store = new Vuex.Store({
@@ -503,7 +503,7 @@ getNamespace (path) {
 这里主要是看子模块是否设置`namespaced`，如果设置，则把`key`拼接到`namespaced`返回，方便之后所有的内容加上命名空间即
 下图所示。
 
-![](../assets/vuex/Store.png)
+![](/assets/vuex/Store.png)
 ```
 const store = new Vuex.Store({
   modules: {
