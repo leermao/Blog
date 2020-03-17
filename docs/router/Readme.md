@@ -12,9 +12,16 @@ Vue.use(VueRouter);
 
 const routes = [
   {
-    path: "/",
+    path: "/home",
     name: "Home",
     component: Home,
+    children: [
+      {
+        path: "/test",
+        name: "Home1",
+        component: Home,
+      },
+    ],
   },
   {
     path: "/about",
@@ -34,6 +41,7 @@ const router = new VueRouter({
 });
 
 export default router;
+
 ```
 可以看出，`vue-router`就是vue的插件，写法就是插件的写法，使用`vue.use`注册，然后`new VueRouter`出实例对象暴露出去。
 
@@ -234,26 +242,10 @@ export default class VueRouter {
   }
 
   init (app: any /* Vue component instance */) {
-    process.env.NODE_ENV !== 'production' && assert(
-      install.installed,
-      `not installed. Make sure to call \`Vue.use(VueRouter)\` ` +
-      `before creating root instance.`
-    )
     // app为new Router返回的实例router，因为new Router可以在页面中创建多次（尽管出现次数少）我们要将每个实例保存
     this.apps.push(app)
 
-    // set up app destroyed handler
-    // https://github.com/vuejs/vue-router/issues/2639
-    app.$once('hook:destroyed', () => {
-      // clean out app from this.apps array once destroyed
-      const index = this.apps.indexOf(app)
-      if (index > -1) this.apps.splice(index, 1)
-      // ensure we still have a main app or null if no apps
-      // we do not release the router so it can be reused
-      if (this.app === app) this.app = this.apps[0] || null
-    })
-
-    // 如果只有一个new Router实例 那么下面就不执行
+    // 如果多次注册new Router实例 那么下面就不执行，第一次执行都注册
     if (this.app) {
       return
     }
@@ -305,25 +297,11 @@ export default class VueRouter {
   }
 
   push (location: RawLocation, onComplete?: Function, onAbort?: Function) {
-    // $flow-disable-line
-    if (!onComplete && !onAbort && typeof Promise !== 'undefined') {
-      return new Promise((resolve, reject) => {
-        this.history.push(location, resolve, reject)
-      })
-    } else {
-      this.history.push(location, onComplete, onAbort)
-    }
+
   }
 
   replace (location: RawLocation, onComplete?: Function, onAbort?: Function) {
-    // $flow-disable-line
-    if (!onComplete && !onAbort && typeof Promise !== 'undefined') {
-      return new Promise((resolve, reject) => {
-        this.history.replace(location, resolve, reject)
-      })
-    } else {
-      this.history.replace(location, onComplete, onAbort)
-    }
+
   }
 
   go (n: number) {
@@ -366,25 +344,7 @@ export default class VueRouter {
     normalizedTo: Location,
     resolved: Route
   } {
-    current = current || this.history.current
-    const location = normalizeLocation(
-      to,
-      current,
-      append,
-      this
-    )
-    const route = this.match(location, current)
-    const fullPath = route.redirectedFrom || route.fullPath
-    const base = this.history.base
-    const href = createHref(base, fullPath, this.mode)
-    return {
-      location,
-      route,
-      href,
-      // for backwards compat
-      normalizedTo: location,
-      resolved: route
-    }
+
   }
 
   addRoutes (routes: Array<RouteConfig>) {
@@ -396,6 +356,326 @@ export default class VueRouter {
 }
 ```
 当我们执行`new VueRouter`的时候先执行了`constructor`，具体我们内容我已经标注了，然后在Vue.mixin的时候中了`this._router.init(this)` 也就是`VueRouter init`方法。
+
+在执行`constructor`的时候，会对matcher做创建 `this.matcher = createMatcher(options.routes || [], this)`
+
+```
+src/create-matcher.js
+
+
+export function createMatcher (
+  routes: Array<RouteConfig>,
+  router: VueRouter
+): Matcher {
+  const { pathList, pathMap, nameMap } = createRouteMap(routes)
+
+  function addRoutes (routes) {
+    createRouteMap(routes, pathList, pathMap, nameMap)
+  }
+
+  function match() {
+    ...
+  }
+
+  return {
+    match,
+    addRoutes
+  }
+}
+```
+在执行`createMatcher`的时候 主要是调用`createRouteMap`
+```
+export function createRouteMap (
+  routes: Array<RouteConfig>,
+  oldPathList?: Array<string>,
+  oldPathMap?: Dictionary<RouteRecord>,
+  oldNameMap?: Dictionary<RouteRecord>
+): {
+  pathList: Array<string>,
+  pathMap: Dictionary<RouteRecord>,
+  nameMap: Dictionary<RouteRecord>
+} {
+
+
+  routes.forEach(route => {
+    addRouteRecord(pathList, pathMap, nameMap, route)
+  })
+
+  return {
+    pathList,
+    pathMap,
+    nameMap
+  }
+}
+
+
+function addRouteRecord (
+  pathList: Array<string>,
+  pathMap: Dictionary<RouteRecord>,
+  nameMap: Dictionary<RouteRecord>,
+  route: RouteConfig,
+  parent?: RouteRecord,
+  matchAs?: string
+) {
+  const { path, name } = route
+
+  const record: RouteRecord = {
+    path: normalizedPath,
+    regex: compileRouteRegex(normalizedPath, pathToRegexpOptions),
+    components: route.components || { default: route.component },
+    instances: {},
+    name,
+    parent,
+    matchAs,
+    redirect: route.redirect,
+    beforeEnter: route.beforeEnter,
+    meta: route.meta || {},
+    props:
+      route.props == null
+        ? {}
+        : route.components
+          ? route.props
+          : { default: route.props }
+  }
+
+  if (route.children) {
+    route.children.forEach(child => {
+      const childMatchAs = matchAs
+        ? cleanPath(`${matchAs}/${child.path}`)
+        : undefined
+      addRouteRecord(pathList, pathMap, nameMap, child, record, childMatchAs)
+    })
+  }
+
+  if (!pathMap[record.path]) {
+    pathList.push(record.path)
+    pathMap[record.path] = record
+  }
+
+
+  if (name) {
+    if (!nameMap[name]) {
+      nameMap[name] = record
+    } else if (process.env.NODE_ENV !== 'production' && !matchAs) {
+      warn(
+        false,
+        `Duplicate named routes definition: ` +
+          `{ name: "${name}", path: "${record.path}" }`
+      )
+    }
+  }
+}
+```
+我将伪代码放到了上面， `createRouteMap`主要返回`pathList pathMap nameMap`从明治我们知道，这三个变量主要是存储 **pach map**的，根据path返回内容 主要方法就是`routes.forEach`递归遍历执行`addRouteRecord`，目的是让children扁平化
+```
+routes就是我们传入的内容
+
+const routes = [
+  {
+    path: "/home",
+    name: "Home",
+    component: Home,
+    children: [
+      {
+        path: "/test",
+        name: "Home1",
+        component: Home,
+      },
+    ],
+  },
+  {
+    path: "/about",
+    name: "About",
+    // route level code-splitting
+    // this generates a separate chunk (about.[hash].js) for this route
+    // which is lazy-loaded when the route is visited.
+    component: () =>
+      import(/* webpackChunkName: "about" */ "../views/About.vue"),
+  },
+];
+```
+而`addRouteRecord`函数就是为往`pathList pathMap nameMap`存储 **RouteRecord**
+```
+const record: RouteRecord = {
+  path: normalizedPath,
+  regex: compileRouteRegex(normalizedPath, pathToRegexpOptions),
+  components: route.components || { default: route.component },
+  instances: {},
+  name,
+  parent,
+  matchAs,
+  redirect: route.redirect,
+  beforeEnter: route.beforeEnter,
+  meta: route.meta || {},
+  props:
+    route.props == null
+      ? {}
+      : route.components
+        ? route.props
+        : { default: route.props }
+}
+```
+`RouteRecord`对象中包含了处理过的一些内容，方便我们使用。
+
+这样处理`pathMap`返回的数据 伪结构为
+```
+pathMap = {
+  '/home': RouteRecord,
+  '/home/test': RouteRecord
+  '/about': RouteRecord
+}
+
+
+RouteRecord 为各自route的内容
+```
+`pathList nameMap`一样的道理，就是递归循环遍历，得到里面扁平的内容，这样形成一个对象，我们就可以直接根据`path`直接拿到内容，这样`createRouteMap`完成了任务。
+
+我们了解了`createRouteMap`之后，看看`createMatcher`的返回
+```
+export function createMatcher (
+  routes: Array<RouteConfig>,
+  router: VueRouter
+): Matcher {
+  const { pathList, pathMap, nameMap } = createRouteMap(routes)
+
+  function addRoutes (routes) {
+    createRouteMap(routes, pathList, pathMap, nameMap)
+  }
+
+  function match() {
+    ...
+  }
+
+  return {
+    match,
+    addRoutes
+  }
+}
+```
+我们`createRouteMap`的作用，也就是了解了`addRoutes`的作用，下面我们说说另一个返回`match`
+```
+export function createMatcher() {
+  ...
+
+  function match() {
+    const location = normalizeLocation(raw, currentRoute, false, router)
+    const { name } = location
+
+    if (name) {
+      const record = nameMap[name]
+
+      if (!record) return _createRoute(null, location)
+      const paramNames = record.regex.keys
+        .filter(key => !key.optional)
+        .map(key => key.name)
+
+      if (typeof location.params !== 'object') {
+        location.params = {}
+      }
+
+      location.path = fillParams(record.path, location.params, `named route "${name}"`)
+
+      return _createRoute(record, location, redirectedFrom)
+    } else if (location.path) {
+      location.params = {}
+      for (let i = 0; i < pathList.length; i++) {
+        const path = pathList[i]
+        const record = pathMap[path]
+        if (matchRoute(record.regex, location.path, location.params)) {
+          return _createRoute(record, location, redirectedFrom)
+        }
+      }
+    }
+    // no match
+    return _createRoute(null, location)
+  }
+}
+```
+里面我留了主要的代码，首先`const location = normalizeLocation(raw, currentRoute, false, router)`就是对传入的route做解析，解析出
+```
+return {
+  _normalized: true,
+  path,
+  query,
+  hash
+}
+
+里面解析法就不深入谈论
+```
+然后判断是否存在name，如果存在`name`执行`_createRoute()`，然后判断`path`，在执行`_createRoute()`，这么我们就知道跳转的方式是先根据`name`后根据`path`，这样我们就知道了 判断完毕之后主要是根据`_createRoute`函数做跳转
+```
+_createRoute
+
+function _createRoute (
+  record: ?RouteRecord,
+  location: Location,
+  redirectedFrom?: Location
+): Route {
+  if (record && record.redirect) {
+    return redirect(record, redirectedFrom || location)
+  }
+  if (record && record.matchAs) {
+    return alias(record, location, record.matchAs)
+  }
+  return createRoute(record, location, redirectedFrom, router)
+}
+```
+这里面就是看我们传递的参数是否存在`redirect`和`matchAs`
+> 这里面的参数是处理之后的参数，源参数中不存在matchAs 这里的参数为const record: RouteRecord = {}
+最后执行`createRoute`函数
+```
+createRoute
+
+export function createRoute (
+  record: ?RouteRecord,
+  location: Location,
+  redirectedFrom?: ?Location,
+  router?: VueRouter
+): Route {
+  const stringifyQuery = router && router.options.stringifyQuery
+
+  let query: any = location.query || {}
+  try {
+    query = clone(query)
+  } catch (e) {}
+
+  const route: Route = {
+    name: location.name || (record && record.name),
+    meta: (record && record.meta) || {},
+    path: location.path || '/',
+    hash: location.hash || '',
+    query,
+    params: location.params || {},
+    fullPath: getFullPath(location, stringifyQuery),
+    matched: record ? formatMatch(record) : []
+  }
+  if (redirectedFrom) {
+    route.redirectedFrom = getFullPath(redirectedFrom, stringifyQuery)
+  }
+  return Object.freeze(route)
+}
+```
+只要返回一个冻结的route。
+
+**总结match**
+主要是根据传入的`routes`处理参数，扁平化之后返回一个映射map`pathList pathMap nameMap`，然后根据跳转路由匹配`name`或者`path`，找到对应的组件。
+
+![''](/assets/router/match.png)
+上面是一张执行的堆栈图，首先执行`Vue.mixin`执行`this._router.init(this);`然后进入Route构造函数执行init，然后执行`history.transitionTo(history.getCurrentLocation());` 执行`transitionTo`会执行`var route = this.router.match(location, this.current);`，然后又执行
+```
+VueRouter.prototype.match = function match (
+  raw,
+  current,
+  redirectedFrom
+) {
+  return this.matcher.match(raw, current, redirectedFrom)
+};
+```
+有关matcher的match过程已经经过 就不多赘述了。也就是当我们访问一个路由的时候  就会执行match方法。
+
+### 路径切换
+
+
 
 
 <!--
