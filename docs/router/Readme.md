@@ -673,34 +673,3 @@ VueRouter.prototype.match = function match (
 ```
 有关matcher的match过程已经经过 就不多赘述了。也就是当我们访问一个路由的时候  就会执行match方法。
 
-<!--
-#### src/history/base.js
-我们根据不用model模式执行不同的API
-```
-switch (mode) {
-  case 'history':
-    this.history = new HTML5History(this, options.base)
-    break
-  case 'hash':
-    this.history = new HashHistory(this, options.base, this.fallback)
-    break
-  case 'abstract':
-    this.history = new AbstractHistory(this, options.base)
-    break
-  default:
-    if (process.env.NODE_ENV !== 'production') {
-      assert(false, `invalid mode: ${mode}`)
-    }
-}
-
-HTML5History：
-export class HTML5History extends History {}
-
-HashHistory:
-export class HashHistory extends History {}
-
-AbstractHistory
-export class AbstractHistory extends History {}
-
-三种不同的路由模式 都继承了History基类
-``` -->
